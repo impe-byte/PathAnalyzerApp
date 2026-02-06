@@ -6,6 +6,7 @@
 
 ## 📋 Indice
 
+- [Download](blob:https://github.com/887eb56b-b0f8-4dc1-9188-66f2685b4a0c)
 - [Screenshot](#-screenshot)
 - [Funzionalità](#-funzionalità)
 - [Requisiti](#-requisiti)
