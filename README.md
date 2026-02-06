@@ -1,449 +1,406 @@
-# 📂 Path Analyzer v3.0 — GUI Edition
+# PathAnalyzer Editor v4.0
 
-> Applicazione desktop Windows per analizzare la struttura di directory locali e di rete, con analisi completa della lunghezza dei percorsi e generazione di report Markdown.
-
----
-
-## 📋 Indice
-
-- [Download](dist/PathAnalyzer.exe)
-- [Screenshot](#-screenshot)
-- [Funzionalità](#-funzionalità)
-- [Requisiti](#-requisiti)
-- [Installazione Rapida](#-installazione-rapida)
-- [Creare l'Eseguibile (.exe)](#-creare-leseguibile-exe)
-- [Struttura del Progetto](#-struttura-del-progetto)
-- [Guida all'Uso](#-guida-alluso)
-- [Parametri e Opzioni](#-parametri-e-opzioni)
-- [Report Generato](#-report-generato)
-- [Troubleshooting](#-troubleshooting)
-- [Note Tecniche](#-note-tecniche)
+> Windows desktop application for scanning directory structures, auditing path lengths, and **bulk-renaming files and folders** to fix paths that exceed configurable character limits — with full preview, rollback, and a guided wizard.
 
 ---
 
-## 🖼️ Screenshot
+## Table of Contents
 
-L'applicazione si presenta con un'interfaccia moderna in dark mode:
+- [The Problem](#the-problem)
+- [The Solution](#the-solution)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Building the Executable (.exe)](#building-the-executable-exe)
+- [Usage Guide](#usage-guide)
+- [Rename Wizard — Step by Step](#rename-wizard--step-by-step)
+- [Available Rename Rules](#available-rename-rules)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Performance & Scale](#performance--scale)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
+## The Problem
+
+Windows has a classic path length limit of **260 characters** (`MAX_PATH`). Many legacy applications, backup tools, and sync services fail when paths exceed this limit. Deep folder nesting with long names quickly pushes paths beyond it.
+
+The obvious fix — renaming folders and files to shorter names — has a critical technical challenge: **cascading path invalidation**. When you rename a parent folder, every child path changes instantly. If a tool has already queued rename operations using the old paths, they all fail. With 100,000+ files, this creates a catastrophic chain of errors.
 
 ```
-╔══════════════════════════════════════════════════════════════════╗
-║  📂 Path Analyzer v3.0                                         ║
-╠══════════════════════════════════════════════════════════════════╣
-║  Percorso: [ C:\Users\Luigi\Documents          ] [📁 Sfoglia]  ║
-║                                                                  ║
-║  Soglia Path: [260]  Profondità: [-1]  Top file: [15]           ║
-║  ☑ Mostra file nascosti  Escludi: [.git, node_modules, ...]    ║
-║                                                                  ║
-║  [🔍 Avvia Scansione] [⏹ Annulla] [💾 Esporta] [📂 Apri]      ║
-║  ████████████████████████████████████████████████ 100%           ║
-║  ✅ Completata in 2.34s — 156 cartelle, 1,247 file, 45.2 MB   ║
-║                                                                  ║
-║  ┌─────────────────────────────────────────────────────────────┐ ║
-║  │ 🌳 Struttura │ 📊 Statistiche │ 📐 Analisi Path │ 📋 Log  │ ║
-║  ├─────────────────────────────────────────────────────────────┤ ║
-║  │ Documents                                                   │ ║
-║  │ ├── Progetti                                                │ ║
-║  │ │   ├── WebApp                                              │ ║
-║  │ │   │   ├── src                                             │ ║
-║  │ │   │   │   ├── index.js                                   │ ║
-║  │ │   │   │   └── styles.css                                 │ ║
-║  │ │   │   └── package.json                                   │ ║
-║  │ │   └── MobileApp                                          │ ║
-║  │ └── Documenti                                               │ ║
-║  └─────────────────────────────────────────────────────────────┘ ║
-╚══════════════════════════════════════════════════════════════════╝
+Before:  C:\Project\Very_Long_Folder_Name\subfolder\report.txt
+Rename parent:  Very_Long_Folder_Name → VLF
+After:   C:\Project\VLF\subfolder\report.txt
+
+Problem: Any operation still referencing the old path → ERROR
 ```
 
 ---
 
-## ✨ Funzionalità
+## The Solution
 
-### Scansione
-- Analisi di percorsi **locali** (`C:\`, `D:\`) e **di rete UNC** (`\\server\share`)
-- Scansione ricorsiva con profondità configurabile
-- Esclusione di cartelle specifiche (`.git`, `node_modules`, ecc.)
-- Opzione per nascondere/mostrare file nascosti
-- **Annullamento** della scansione in corso
+PathAnalyzer Editor uses a **3-phase architecture** with **bottom-up execution** to completely eliminate cascading path invalidation:
 
-### Analisi Path
-- Calcolo lunghezza in caratteri di ogni percorso (file e cartelle)
-- **Soglia personalizzabile** (default 260 = `MAX_PATH` di Windows)
-- Segnalazione visiva dei percorsi che superano la soglia
-- Distribuzione statistica delle lunghezze
-- Top 10 percorsi più lunghi
-- Media e mediana delle lunghezze
+### Phase 1: SCAN (Read-Only)
+Full recursive scan of the directory tree. No filesystem changes. Builds an in-memory model.
 
-### Struttura ad Albero
-- **Vista pulita** in stile `tree` classico (come nel tuo esempio)
-- **Vista dettagliata** con icone, dimensioni e lunghezza path
-- Connettori Unicode (`├──`, `└──`, `│`)
+### Phase 2: PLAN (In-Memory)
+The user configures rename rules through the wizard. The engine computes ALL changes in memory without touching the filesystem. Full preview before execution.
 
-### Report Markdown
-- Export completo in formato `.md`
-- Tabelle formattate per GitHub/VS Code/qualsiasi viewer Markdown
-- Sezioni: Info, Riepilogo, Analisi Path, Estensioni, File grandi, Albero, Indice
+### Phase 3: EXECUTE (Bottom-Up)
+Operations are sorted by depth (deepest first) and executed bottom-up:
 
-### Interfaccia
-- GUI moderna con **CustomTkinter** (dark mode)
-- 4 tab: Struttura, Statistiche, Analisi Path, Log
-- Barra di progresso e stato in tempo reale
-- Sfoglia cartelle con dialog nativo di Windows
+```
+Depth 5:  rename deepest files and folders
+Depth 4:  rename one level above
+Depth 3:  ...
+Depth 2:  ...
+Depth 1:  ...
+Depth 0:  rename root-level items (if needed)
+```
+
+**Why this works:** When a folder is renamed, all its children have ALREADY been processed. The old path is still valid at the moment of rename. No cascading invalidation.
+
+```
+Bottom-Up Execution Example:
+
+1. Rename C:\A_Long\B_Long\long_file.txt → C:\A_Long\B_Long\lf.txt     OK (file first)
+2. Rename C:\A_Long\B_Long\             → C:\A_Long\BL\                 OK (child done)
+3. Rename C:\A_Long\                    → C:\AL\                        OK (all children done)
+
+Final result: C:\AL\BL\lf.txt  ✓
+```
 
 ---
 
-## 📋 Requisiti
+## Features
 
-### Per eseguire dal sorgente Python
-- **Python 3.8+** (consigliato 3.11+)
+### Scanning
+- Recursive scan of **local** (`C:\`, `D:\`) and **network UNC** (`\\server\share`) paths
+- Configurable max depth, folder exclusions, hidden file filtering
+- Cancel scan at any time
+
+### Path Analysis
+- Character-level path length measurement for every file and folder
+- Configurable threshold (default: 260 = Windows `MAX_PATH`)
+- Distribution histogram, top 10 longest paths, average/median stats
+- Full list of all paths exceeding the threshold
+
+### Rename Editor (Wizard)
+- **8 rename rule types** — find/replace, truncate, regex, smart abbreviation, and more
+- Rules apply to files, folders, or both — fully configurable
+- **Full preview** of every operation before execution
+- **Conflict detection** — catches duplicate names, missing paths
+- **Bottom-up execution** — eliminates cascading path invalidation
+- **Rollback** — undo all changes with one click
+- **Undo log** — JSON file saved automatically for recovery
+
+### Interface
+- Modern dark-mode GUI with CustomTkinter
+- 4 tabs: Structure (tree view), Statistics, Path Analysis, Log
+- Real-time progress bar, cancel support
+- Markdown report export
+
+---
+
+## Requirements
+
+### To run from source
+- **Python 3.8+** (3.11+ recommended)
 - **customtkinter** >= 5.2.0
 
-### Per creare l'eseguibile
-- Tutto quanto sopra, più:
-- **PyInstaller** >= 6.0
+### To build the executable
+- All of the above, plus **PyInstaller** >= 6.0
 
-### Per usare l'eseguibile compilato
-- **Windows 10/11** (64-bit)
-- Nessun altro requisito! L'exe è completamente standalone.
+### To use the compiled executable
+- **Windows 10/11** (64-bit) — no other dependencies
 
 ---
 
-## 🚀 Installazione Rapida
+## Quick Start
 
-### 1. Scarica i file del progetto
+### 1. Download the project files
 
-Metti tutti i file nella stessa cartella:
+Place all files in the same folder:
 
 ```
-PathAnalyzerApp/
-├── path_analyzer_gui.py      ← Applicazione principale
-├── requirements.txt          ← Dipendenze Python
-├── PathAnalyzer.spec         ← Configurazione PyInstaller
-├── build_exe.bat             ← Script automatico di build
-└── README.md                 ← Questa documentazione
+PathAnalyzerEditor/
+├── path_analyzer_editor.py     ← Main application
+├── requirements.txt            ← Python dependencies
+├── PathAnalyzerEditor.spec     ← PyInstaller config
+├── build_exe.bat               ← Automated build script
+├── ARCHITECTURE.md             ← Technical architecture (Italian)
+└── README.md                   ← This file
 ```
 
-### 2. Installa le dipendenze
-
-Apri un terminale nella cartella del progetto:
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Avvia l'applicazione
+### 3. Run the application
 
 ```bash
-python path_analyzer_gui.py
+python path_analyzer_editor.py
 ```
 
 ---
 
-## 📦 Creare l'Eseguibile (.exe)
+## Building the Executable (.exe)
 
-### Metodo 1: Script Automatico (Consigliato)
+### Automated (Recommended)
 
-**Fai doppio click su `build_exe.bat`**
+**Double-click `build_exe.bat`** — it will:
+1. Verify Python installation
+2. Install dependencies
+3. Compile the executable (including CustomTkinter assets)
+4. Clean up temporary files
+5. Open the output folder
 
-Lo script automaticamente:
-1. ✅ Verifica Python
-2. ✅ Installa le dipendenze
-3. ✅ Compila l'eseguibile con i temi CustomTkinter inclusi
-4. ✅ Pulisce i file temporanei
-5. ✅ Apre la cartella con l'exe
+The executable will be at `dist\PathAnalyzerEditor.exe` (~20-25 MB).
 
-### Metodo 2: Manuale via Terminale
+### Manual
 
 ```bash
-# Installa dipendenze
 pip install -r requirements.txt
-
-# Build con spec file (CONSIGLIATO - gestisce customtkinter)
-pyinstaller PathAnalyzer.spec --clean --noconfirm
-
-# L'exe sarà in: dist/PathAnalyzer.exe
+pyinstaller PathAnalyzerEditor.spec --clean --noconfirm
 ```
 
-### Metodo 3: Manuale senza spec file
+### Distribution
 
-```bash
-# Trova il percorso di customtkinter
-python -c "import customtkinter, os; print(os.path.dirname(customtkinter.__file__))"
-# Output esempio: C:\Python311\Lib\site-packages\customtkinter
-
-# Build (sostituisci il percorso)
-pyinstaller --onefile --noconsole --name PathAnalyzer ^
-  --add-data "C:\Python311\Lib\site-packages\customtkinter;customtkinter" ^
-  path_analyzer_gui.py
-```
-
-### Risultato del Build
-
-```
-PathAnalyzerApp/
-├── dist/
-│   └── PathAnalyzer.exe    ← IL TUO ESEGUIBILE (~20-25 MB)
-├── build/                   ← puoi cancellare
-└── ...
-```
-
-### Distribuzione
-
-Il file `PathAnalyzer.exe` è **completamente standalone**:
-- ✅ NON richiede Python installato
-- ✅ NON richiede librerie aggiuntive
-- ✅ Funziona su qualsiasi Windows 10/11 (64-bit)
-- ✅ Copia singolo file, zero configurazione
+The `.exe` file is **fully standalone**:
+- Does NOT require Python on the target machine
+- Does NOT require any additional libraries
+- Works on any Windows 10/11 (64-bit)
+- Single file, zero configuration
 
 ---
 
-## 📁 Struttura del Progetto
+## Usage Guide
 
-```
-PathAnalyzerApp/
-├── path_analyzer_gui.py      # Sorgente principale (tutto in un file)
-│                              #   ├── Data Classes (FileInfo, DirInfo, Stats)
-│                              #   ├── Utility (format_size, is_hidden, ecc.)
-│                              #   ├── PathAnalyzer Engine (scanner + report)
-│                              #   └── PathAnalyzerApp GUI (CustomTkinter)
-├── requirements.txt           # Dipendenze: customtkinter, pyinstaller
-├── PathAnalyzer.spec          # Config PyInstaller (include assets CTk)
-├── build_exe.bat              # Script automatico di compilazione
-└── README.md                  # Documentazione (questo file)
-```
+### 1. Select the Path
 
-### Architettura del Codice
+Enter the path manually or click **Browse** to select a folder. Supports both local paths and network UNC paths (`\\server\share\folder`).
 
-```
-path_analyzer_gui.py
-│
-├── DATA CLASSES
-│   ├── FileInfo          → Info singolo file (nome, path, size, ext, path_length)
-│   ├── DirInfo           → Info directory (files, subdirs, totali)
-│   ├── PathLengthStats   → Statistiche lunghezza path
-│   └── ScanStats         → Statistiche globali scansione
-│
-├── UTILITY FUNCTIONS
-│   ├── format_size()     → Formattazione dimensioni (B/KB/MB/GB)
-│   ├── format_date()     → Formattazione date
-│   ├── is_hidden()       → Rilevamento file nascosti (Windows API)
-│   ├── get_file_icon()   → Icone per estensione
-│   └── safe_stat()       → os.stat() con error handling
-│
-├── PathAnalyzer (ENGINE)
-│   ├── scan()            → Scansione ricorsiva (thread-safe)
-│   ├── cancel()          → Annullamento scansione
-│   ├── build_clean_tree()  → Albero stile `tree`
-│   ├── build_detail_tree() → Albero con dettagli
-│   └── generate_report()   → Export Markdown completo
-│
-└── PathAnalyzerApp (GUI)
-    ├── __init__()        → Setup finestra + tema
-    ├── _build_ui()       → Costruzione interfaccia
-    ├── _start_scan()     → Lancio scansione in thread separato
-    ├── _on_scan_complete() → Popolamento tab risultati
-    └── _export_report()  → Salvataggio report .md
-```
+### 2. Configure Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| **Path Threshold** | Max path length in characters before flagging | `260` |
+| **Max Depth** | Recursion limit (`-1` = unlimited) | `-1` |
+| **Hidden Files** | Include/exclude hidden files and folders | Included |
+| **Exclude Folders** | Comma-separated list of folders to skip | `.git, node_modules, ...` |
+
+### 3. Run the Scan
+
+Click **Scan** and wait for the analysis to complete. Results populate across 4 tabs:
+
+| Tab | Content |
+|-----|---------|
+| **Structure** | Clean `tree`-style directory view |
+| **Statistics** | Extension breakdown, largest files |
+| **Path Analysis** | Length distribution, all paths over threshold |
+| **Log** | Timestamped operation log |
+
+### 4. Open the Rename Editor
+
+If paths over the threshold are found, the **Rename Editor** button activates. Click it to open the guided wizard.
+
+### 5. Export Report
+
+Click **Export .md** to save a full Markdown report with all analysis results.
 
 ---
 
-## 📖 Guida all'Uso
+## Rename Wizard — Step by Step
 
-### 1. Seleziona il Percorso
+### Step 1: Configure Rules
 
-- Digita il percorso manualmente nel campo di testo
-- Oppure clicca **📁 Sfoglia** per selezionare la cartella
-- Supporta percorsi locali (`C:\Users\...`) e di rete (`\\server\share`)
+Add one or more rename rules from the left panel. Each rule can target files, folders, or both. Rules are applied in sequence (top to bottom).
 
-### 2. Configura le Opzioni
+### Step 2: Preview
 
-| Opzione | Descrizione | Default |
-|---------|-------------|---------|
-| **Soglia Path** | Lunghezza massima in caratteri prima di segnalare un warning | `260` |
-| **Profondità max** | Livelli massimi di ricorsione (`-1` = illimitata) | `-1` |
-| **Top file** | Numero di file più grandi da mostrare | `15` |
-| **File nascosti** | Include/escludi file e cartelle nascosti | ✅ Inclusi |
-| **Escludi cartelle** | Lista separata da virgola delle cartelle da ignorare | `.git, node_modules, ...` |
+The engine calculates ALL operations in memory and displays:
+- Total operations planned
+- Estimated character savings
+- Conflicts (duplicate names, etc.)
+- Full list: old name → new name, with path lengths and savings
+- Complete path details for every operation
 
-### 3. Avvia la Scansione
+If conflicts are detected, execution is blocked until resolved.
 
-- Clicca **🔍 Avvia Scansione**
-- La barra di progresso si attiva
-- Puoi **⏹ Annullare** in qualsiasi momento
+### Step 3: Confirm
 
-### 4. Esplora i Risultati
+Review the summary and choose error handling behavior:
+- **Skip and continue** — skip failed operations, process the rest
+- **Stop on error** — halt execution at the first failure
 
-I risultati sono divisi in 4 tab:
+### Step 4: Execute
 
-| Tab | Contenuto |
-|-----|-----------|
-| **🌳 Struttura** | Albero delle directory in stile `tree` |
-| **📊 Statistiche** | Riepilogo, distribuzione estensioni, file più grandi |
-| **📐 Analisi Path** | Distribuzione lunghezze, path oltre soglia, percorsi più lunghi |
-| **📋 Log** | Log delle operazioni con timestamp |
-
-### 5. Esporta il Report
-
-- Clicca **💾 Esporta Report .md**
-- Scegli dove salvare il file Markdown
-- Clicca **📂 Apri Report** per visualizzarlo
+Operations run bottom-up with real-time progress. After completion:
+- A **JSON undo log** is saved automatically
+- The **Rollback** button lets you revert ALL changes instantly
+- A summary shows successes, errors, and details
 
 ---
 
-## ⚙️ Parametri e Opzioni
+## Available Rename Rules
 
-### Soglia Lunghezza Path
+| Rule | Description | Example |
+|------|-------------|---------|
+| **Find & Replace** | Replace text in names (case sensitive or not) | `Old_Project` → `OP` |
+| **Truncate** | Cut names to max N characters (extension preserved) | `VeryLongName.txt` → `VeryL.txt` |
+| **Remove Characters** | Remove specific characters | `file__name` → `filename` |
+| **Remove Prefix** | Strip a prefix from names | `backup_report.txt` → `report.txt` |
+| **Remove Suffix** | Strip a suffix (before extension) | `file_old.txt` → `file.txt` |
+| **Compress Separators** | Collapse repeated separators | `my___file` → `my_file` |
+| **Regex Replace** | Custom pattern matching | `IMG_\d{8}` → `img` |
+| **Smart Abbreviate** | Auto-shorten common words (EN + IT) | `Documents` → `Docs`, `Configuration` → `Cfg` |
 
-Il valore di default è **260 caratteri**, che corrisponde al limite classico `MAX_PATH` di Windows.
-
-| Soglia | Caso d'uso |
-|--------|------------|
-| `260` | Standard Windows — identifica file che non possono essere aperti da programmi legacy |
-| `200` | Conservativo — identifica path che potrebbero causare problemi con vecchi software |
-| `150` | Restrittivo — per ambienti con limiti più severi |
-| `32767` | Nessun limite pratico — per analisi solo statistica |
-
-### Cartelle Escluse di Default
+### Smart Abbreviation Dictionary (partial)
 
 ```
-.git, node_modules, __pycache__, .vs, .vscode
+documents → docs        configuration → cfg       application → app
+development → dev       production → prod         temporary → tmp
+library → lib           resource → res            information → info
+database → db           screenshot → scrn         repository → repo
+administration → admin  management → mgmt         specification → spec
 ```
 
-Puoi aggiungere altre cartelle separate da virgola, ad esempio:
-```
-.git, node_modules, __pycache__, .vs, .vscode, bin, obj, dist, build
-```
+Italian words are also supported: `documenti → docs`, `configurazione → cfg`, `progetto → prj`, etc.
 
 ---
 
-## 📄 Report Generato
-
-Il report `.md` contiene le seguenti sezioni:
-
-### Struttura del Report
+## Architecture
 
 ```
-# 📂 Path Analyzer Report
+path_analyzer_editor.py
 │
-├── ℹ️ Informazioni Percorso         → Dettagli scansione
-├── 📊 Riepilogo Generale            → Conteggi e dimensioni
-├── 📐 Analisi Lunghezza Percorsi
-│   ├── Statistiche Generali         → Media, mediana, estremi
-│   ├── Distribuzione                → Istogramma per range
-│   ├── Top 10 più Lunghi            → Con stato OK/OLTRE
-│   ├── Percorsi Oltre Soglia        → Tabella dettagliata
-│   └── Percorsi più Lunghi per Tipo → File e cartella record
-├── 🏷️ Distribuzione per Estensione  → Tabella con barre
-├── 📏 File più Grandi               → Top N con path length
-├── ⚠️ Errori                        → Se presenti
-├── 🌳 Struttura Directory
-│   ├── Vista Pulita                 → Stile `tree` classico
-│   └── Vista Dettagliata            → Con dimensioni e path length
-└── 📋 Indice Completo               → Tutti i file per cartella
+├── DATA LAYER
+│   ├── FileInfo, DirInfo         → File/directory metadata
+│   ├── RenameOperation           → Single planned operation (old → new + depth)
+│   ├── RenamePlan                → Ordered list of operations + validation
+│   └── RenameRule                → User-configured rule with parameters
+│
+├── ENGINE
+│   ├── PathAnalyzer              → Recursive scanner (os.scandir, thread-safe)
+│   ├── RenameEngine              → Rename planner + executor
+│   │   ├── create_plan()         → Compute all operations in memory
+│   │   ├── execute()             → Bottom-up execution with progress
+│   │   ├── rollback()            → Reverse all executed operations
+│   │   └── save_undo_log()       → JSON log for recovery
+│   │
+│   └── RuleProcessor             → Apply rename rules to names
+│       ├── find_replace()
+│       ├── truncate()
+│       ├── smart_abbreviate()
+│       └── regex_replace()
+│
+└── GUI
+    ├── PathAnalyzerApp           → Main window (scan + analysis + report)
+    └── WizardWindow              → 4-step rename wizard
+        ├── Step 1: Rules         → Configure rename rules
+        ├── Step 2: Preview       → Full diff preview
+        ├── Step 3: Confirm       → Warnings + error handling choice
+        └── Step 4: Execute       → Progress + rollback + results
 ```
 
-### Esempio Vista Pulita
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Bottom-up execution** | Eliminates cascading path invalidation — the core problem |
+| **3-phase separation** | Scan/Plan/Execute are fully decoupled; Plan never touches disk |
+| **os.walk(topdown=False)** | Native bottom-up traversal, proven and efficient |
+| **os.scandir()** | 2-20x faster than os.listdir() for large directories |
+| **Single-file app** | Simplifies distribution and PyInstaller bundling |
+| **JSON undo log** | Machine-readable rollback data, survives app crashes |
+| **Thread-per-operation** | GUI never blocks during scan or execution |
+
+---
+
+## Project Structure
 
 ```
-Documents
-├── Progetti
-│   ├── WebApp
-│   │   ├── src
-│   │   │   ├── index.js
-│   │   │   └── styles.css
-│   │   └── package.json
-│   └── MobileApp
-│       └── App.tsx
-└── Archivio
-    └── backup_2024.zip
+PathAnalyzerEditor/
+├── path_analyzer_editor.py     # Complete application (1400+ lines)
+├── requirements.txt            # customtkinter, pyinstaller
+├── PathAnalyzerEditor.spec     # PyInstaller config (bundles CTk assets)
+├── build_exe.bat               # One-click build script (pure ASCII)
+├── ARCHITECTURE.md             # Detailed technical docs (Italian)
+└── README.md                   # This file
 ```
 
 ---
 
-## 🔧 Troubleshooting
+## Performance & Scale
 
-### L'antivirus blocca l'exe
+### Tested Scale
+- Designed for directories with **100,000+ files**
+- Scan uses `os.scandir()` for maximum filesystem performance
+- Progress updates every N items (not every single one) to avoid GUI overhead
 
-PyInstaller crea exe che alcuni antivirus segnalano come falsi positivi.
+### Memory Usage
+- Only metadata is held in memory (name, path, size) — never file contents
+- ~50-100 MB RAM for 100K files
+- Rename operations are lightweight string pairs
 
-**Soluzione:** Aggiungi un'eccezione per `PathAnalyzer.exe` nel tuo antivirus.
+### Robustness
+- Network paths (UNC): handled with error tolerance
+- Files in use by other processes: skip + log
+- Insufficient permissions: skip + log
+- Unicode filenames: full support
+- Rollback: reverse execution order (top-down) for safe undo
 
-### Errore "ModuleNotFoundError: customtkinter"
+---
 
+## Troubleshooting
+
+### Antivirus blocks the .exe
+PyInstaller-generated executables trigger false positives in some antivirus software. Add an exception for `PathAnalyzerEditor.exe`.
+
+### "ModuleNotFoundError: customtkinter"
 ```bash
 pip install customtkinter --upgrade
 ```
 
-### L'exe si apre e si chiude subito
+### Build fails with customtkinter error
+Always use the `.spec` file which includes CustomTkinter assets:
+```bash
+pyinstaller PathAnalyzerEditor.spec --clean --noconfirm
+```
 
-Probabilmente c'è un errore. Per vedere i messaggi, esegui l'exe dal terminale:
-
+### The .exe opens and closes immediately
+Run from terminal to see errors:
 ```bash
 cd dist
-PathAnalyzer.exe
+PathAnalyzerEditor.exe
 ```
 
-### Build fallisce con errore su customtkinter
+### Network path not working
+- Verify the UNC path is reachable: `dir \\server\share\folder`
+- Check access permissions
+- Network latency may cause timeouts on very large shares
 
-Assicurati di usare il file `.spec` che include gli assets di CustomTkinter:
+### Scan is slow on huge directories
+- Set a **max depth** limit (e.g., 5)
+- **Exclude** heavy folders: `node_modules, .git, bin, obj, dist, build`
+- The scan runs in a separate thread — the GUI stays responsive
 
-```bash
-pyinstaller PathAnalyzer.spec --clean --noconfirm
-```
-
-### La finestra è troppo piccola / grande
-
-La finestra si ridimensiona liberamente. La dimensione minima è 800x600. Puoi massimizzare con il pulsante standard di Windows.
-
-### Il percorso di rete non funziona
-
-- Assicurati che il percorso UNC sia raggiungibile: `\\server\share\cartella`
-- Verifica le autorizzazioni di accesso
-- Testa con `dir \\server\share\cartella` nel prompt dei comandi
-
-### Scansione lenta su cartelle molto grandi
-
-Per cartelle con decine di migliaia di file:
-- Imposta un **limite di profondità** (es. `-d 5`)
-- **Escludi** cartelle pesanti (`node_modules`, `.git`, `bin`, `obj`)
-- La scansione è in un thread separato e non blocca l'interfaccia
+### Rollback doesn't fully restore
+- The JSON undo log is saved next to the scanned directory
+- If files were modified by other processes after rename, rollback may partially fail
+- Always check the log for details
 
 ---
 
-## 📝 Note Tecniche
+## License
 
-### Perché CustomTkinter?
-
-- **Aspetto moderno** — dark mode nativa, widget arrotondati
-- **Nessuna dipendenza esterna** — basato su Tkinter (incluso in Python)
-- **Leggero** — nessun browser embedded (come Electron)
-- **Facile da distribuire** — un singolo exe con PyInstaller
-
-### Thread Safety
-
-La scansione avviene in un **thread separato** per non bloccare la GUI.
-Il callback `progress_callback` usa `self.after()` per aggiornare la UI dal thread principale (thread-safe con Tkinter).
-
-### Limiti
-
-- L'exe è per **Windows 64-bit** (la stessa architettura del Python usato per il build)
-- Il rilevamento dei file nascosti usa l'API Windows (`ctypes.windll`) — su Linux/Mac usa solo il prefisso `.`
-- Per cartelle con milioni di file, il report Markdown potrebbe essere molto grande
-
-### Compatibilità
-
-| Windows | Stato |
-|---------|-------|
-| Windows 11 | ✅ Testato |
-| Windows 10 | ✅ Compatibile |
-| Windows 8.1 | ⚠️ Non testato |
-| Windows 7 | ❌ Non supportato (Python 3.9+ non supporta Win7) |
+Free to use, modify, and redistribute.
 
 ---
 
-## 📜 Licenza
-
-Progetto sviluppato per uso interno. Puoi modificarlo e redistribuirlo liberamente.
-
----
-
-*Path Analyzer v3.0 GUI — Sviluppato con Python + CustomTkinter*
+*PathAnalyzer Editor v4.0 — Built with Python + CustomTkinter*
